@@ -193,12 +193,32 @@ void app_main(void) {
 
     system_mode_t current_mode = read_mode_from_toggle();
     system_state_t previous_state = current_state;
+    static float distances[15];
+    static float v[14];
+    static float a[13];
 
     // 5. Main Loop
     while (1) {
         if (current_state != previous_state) {
             if (current_state == STATE_WAITING) {
                 set_servo_angle(90); // Reset gate to open when returning to waiting
+            } else if (current_state == STATE_ACTION) {
+                if (current_mode == MODE_COLLECTION) {
+                    printf("DATA,%.2f", distances[14]);
+                    for (int i = 13; i >= 7; i--) printf(",%.2f", v[i]);
+                    for (int i = 12; i >= 6; i--) printf(",%.2f", a[i]);
+                    printf("\n");
+                    ESP_LOGI(TAG, "Data saved. Waiting for reset.");
+                } else {
+                    bool close_gate = predict_gate_action(distances[14], v, a);
+                    if (close_gate) {
+                        ESP_LOGW(TAG, "INFERENCE: Train approaching. CLOSING GATE.");
+                        set_servo_angle(0);
+                    } else {
+                        ESP_LOGI(TAG, "INFERENCE: Train stopping/safe. Gate remains open.");
+                        set_servo_angle(90);
+                    }
+                }
             }
             previous_state = current_state;
         }
@@ -217,44 +237,19 @@ void app_main(void) {
             set_rgb_color(1, 0, 0); // Red: READING
             ESP_LOGW(TAG, "Train Detected! Collecting features...");
 
-            float distances[15] = {0};
-            
             for (int i = 0; i < 15; i++) {
                 distances[i] = read_distance_cm();
-                vTaskDelay(pdMS_TO_TICKS(100)); 
+                vTaskDelay(pdMS_TO_TICKS(100));
             }
 
             // Feature extraction
             float dt = 0.1;
-            float v[14] = {0};
-            float a[13] = {0};
 
             for (int i = 0; i < 14; i++) {
                 v[i] = (distances[i+1] - distances[i]) / dt;
             }
             for (int i = 0; i < 13; i++) {
                 a[i] = (v[i+1] - v[i]) / dt;
-            }
-
-            // --- BRANCH BASED ON MODE ---
-            if (current_mode == MODE_COLLECTION) {
-                // Output CSV
-                printf("DATA,%.2f", distances[14]);
-                for (int i = 13; i >= 7; i--) printf(",%.2f", v[i]);
-                for (int i = 12; i >= 6; i--) printf(",%.2f", a[i]);
-                printf("\n");
-                
-                ESP_LOGI(TAG, "Data saved. Waiting for reset.");
-            } else {
-                // Run Inference
-                bool close_gate = predict_gate_action(distances[14], v, a);
-                
-                if (close_gate) {
-                    ESP_LOGW(TAG, "INFERENCE: Train approaching. CLOSING GATE.");
-                    set_servo_angle(0); // Close gate
-                } else {
-                    ESP_LOGI(TAG, "INFERENCE: Train stopping/safe. Gate remains open.");
-                }
             }
 
             current_state = STATE_ACTION;
