@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "driver/adc.h"
 #include "driver/ledc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -11,6 +12,8 @@ static const char *TAG = "RAILWAY_SYSTEM";
 
 // --- Pin Definitions ---
 #define HALL_SENSOR_GPIO 27
+#define HALL_ANALOG_GPIO  34
+#define HALL_ANALOG_CHANNEL ADC1_CHANNEL_6
 #define BUTTON_GPIO      26
 #define TOGGLE_GPIO      25
 #define SERVO_GPIO       21
@@ -27,6 +30,10 @@ static const char *TAG = "RAILWAY_SYSTEM";
 #define SERVO_MAX_DEGREE        180  // Maximum angle
 #define SERVO_OPEN_ANGLE        0   // Angle to keep gate open
 #define SERVO_CLOSE_ANGLE       170    // Angle to close gate
+
+// Hall module output is active-high on this board: D0 rises when the magnet is present.
+// Use a shorter debounce so a fast moving train can still trigger reliably.
+#define HALL_TRIGGER_DEBOUNCE_US 150000
 
 // --- System States & Modes ---
 typedef enum {
@@ -79,7 +86,7 @@ static void IRAM_ATTR gpio_isr_handler(void* arg) {
     int64_t now = esp_timer_get_time();
 
     if (gpio_num == HALL_SENSOR_GPIO) {
-        if (hall_sensor_armed && current_state == STATE_WAITING && (now - last_hall_trigger > 500000)) {
+        if (hall_sensor_armed && current_state == STATE_WAITING && (now - last_hall_trigger > HALL_TRIGGER_DEBOUNCE_US)) {
             current_state = STATE_READING;
             hall_sensor_armed = false;
             last_hall_trigger = now;
@@ -128,7 +135,7 @@ bool predict_gate_action(float distance, float* v, float* a) {
 void app_main(void) {
     // 1. Configure Inputs
     gpio_config_t in_conf = {
-        .intr_type = GPIO_INTR_NEGEDGE,
+        .intr_type = GPIO_INTR_POSEDGE,
         .mode = GPIO_MODE_INPUT,
         .pin_bit_mask = (1ULL << HALL_SENSOR_GPIO) | (1ULL << BUTTON_GPIO),
         .pull_up_en = 1,
@@ -161,6 +168,9 @@ void app_main(void) {
         .pull_up_en = 0,
     };
     gpio_config(&echo_conf);
+
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(HALL_ANALOG_CHANNEL, ADC_ATTEN_DB_11);
 
     // 3. Configure Servo PWM (LEDC)
     ledc_timer_config_t ledc_timer = {
@@ -198,6 +208,7 @@ void app_main(void) {
     static float distances[15];
     static float v[14];
     static float a[13];
+    static int64_t last_hall_analog_log = 0;
 
     // 5. Main Loop
     while (1) {
@@ -229,8 +240,17 @@ void app_main(void) {
             set_rgb_color(0, 0, 1); // Blue: WAITING
             current_mode = read_mode_from_toggle(); // Update mode based on toggle switch            
 
-            if (gpio_get_level(HALL_SENSOR_GPIO) == 1) {
+            if (gpio_get_level(HALL_SENSOR_GPIO) == 0) {
                 hall_sensor_armed = true;
+            }
+
+            int64_t now = esp_timer_get_time();
+            if (now - last_hall_analog_log >= 100000) {
+                int hall_analog_raw = adc1_get_raw(HALL_ANALOG_CHANNEL);
+                float hall_analog_volts = (hall_analog_raw * 3.3f) / 4095.0f;
+                ESP_LOGI(TAG, "Hall monitor: D0=%d A0 raw=%d approx=%.2fV armed=%d",
+                         gpio_get_level(HALL_SENSOR_GPIO), hall_analog_raw, hall_analog_volts, hall_sensor_armed);
+                last_hall_analog_log = now;
             }
 
             vTaskDelay(pdMS_TO_TICKS(100));
