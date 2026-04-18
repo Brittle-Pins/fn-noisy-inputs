@@ -257,7 +257,6 @@ void app_main(void) {
     static float distances[15];
     static float v[14];
     static float a[13];
-    static int64_t last_hall_analog_log = 0;
 
     // 5. Main Loop
     while (1) {
@@ -291,15 +290,6 @@ void app_main(void) {
 
             if (gpio_get_level(HALL_SENSOR_GPIO) == 0) {
                 hall_sensor_armed = true;
-            }
-
-            int64_t now = esp_timer_get_time();
-            if (now - last_hall_analog_log >= 100000) {
-                int hall_analog_raw = adc1_get_raw(HALL_ANALOG_CHANNEL);
-                float hall_analog_volts = (hall_analog_raw * 3.3f) / 4095.0f;
-                ESP_LOGI(TAG, "Hall monitor: D0=%d A0 raw=%d approx=%.2fV armed=%d",
-                         gpio_get_level(HALL_SENSOR_GPIO), hall_analog_raw, hall_analog_volts, hall_sensor_armed);
-                last_hall_analog_log = now;
             }
 
             vTaskDelay(pdMS_TO_TICKS(100));
