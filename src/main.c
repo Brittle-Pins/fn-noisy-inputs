@@ -25,6 +25,8 @@ static const char *TAG = "RAILWAY_SYSTEM";
 #define SERVO_MIN_PULSEWIDTH_US 500  // Minimum pulse width in microsecond (0 degrees)
 #define SERVO_MAX_PULSEWIDTH_US 2500 // Maximum pulse width in microsecond (180 degrees)
 #define SERVO_MAX_DEGREE        180  // Maximum angle
+#define SERVO_OPEN_ANGLE        0   // Angle to keep gate open
+#define SERVO_CLOSE_ANGLE       170    // Angle to close gate
 
 // --- System States & Modes ---
 typedef enum {
@@ -181,8 +183,8 @@ void app_main(void) {
     };
     ledc_channel_config(&ledc_channel);
 
-    // Initialize Gate to OPEN (90 degrees)
-    set_servo_angle(90);
+    // Initialize Gate to OPEN
+    set_servo_angle(SERVO_OPEN_ANGLE);
 
     // 4. Attach Interrupts
     gpio_install_isr_service(0);
@@ -201,7 +203,7 @@ void app_main(void) {
     while (1) {
         if (current_state != previous_state) {
             if (current_state == STATE_WAITING) {
-                set_servo_angle(90); // Reset gate to open when returning to waiting
+                set_servo_angle(SERVO_OPEN_ANGLE); // Reset gate to open when returning to waiting
             } else if (current_state == STATE_ACTION) {
                 if (current_mode == MODE_COLLECTION) {
                     printf("DATA,%.2f", distances[14]);
@@ -213,10 +215,10 @@ void app_main(void) {
                     bool close_gate = predict_gate_action(distances[14], v, a);
                     if (close_gate) {
                         ESP_LOGW(TAG, "INFERENCE: Train approaching. CLOSING GATE.");
-                        set_servo_angle(0);
+                        set_servo_angle(SERVO_CLOSE_ANGLE);
                     } else {
                         ESP_LOGI(TAG, "INFERENCE: Train stopping/safe. Gate remains open.");
-                        set_servo_angle(90);
+                        set_servo_angle(SERVO_OPEN_ANGLE);
                     }
                 }
             }
