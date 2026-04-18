@@ -8,7 +8,7 @@
 - Reset button: returns the system into the WAITING state
 - Hall sensor: on trigger, brings the system into the READING state
 - Ultrasound sensor: when the system is in the READING state, performs distance reading every 100 µs
-- Servo motor: drives the gate; is in the 90 position when open, in the 0 position when closed
+- Servo motor: drives the gate; is in the 0 position when open, in the 180 position when closed
 
 # Workflow
 
@@ -42,8 +42,8 @@ If INFERENCE:
     - Ultrasound sensor readings are collected (1.5 s; 15 readings)
     - State LED turns GREEN
     - The system is brought into the ACTION state
-    - **If the gate action predictor returns CLOSE_GATE, set the servo motor to the 0 position; else leave the motor in the 90 position**
+    - **If the gate action predictor returns CLOSE_GATE, set the servo motor to the 180 position; else leave the motor in the 0 position**
     - Waiting for the reset
 5. On reset button press:
-    - **Set the motor to the 90 position (open)**
+    - **Set the motor to the 0 position (open)**
     - Return to the operation mode detection

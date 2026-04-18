@@ -29,7 +29,12 @@ static const char *TAG = "RAILWAY_SYSTEM";
 #define SERVO_MAX_PULSEWIDTH_US 2500 // Maximum pulse width in microsecond (180 degrees)
 #define SERVO_MAX_DEGREE        180  // Maximum angle
 #define SERVO_OPEN_ANGLE        0   // Angle to keep gate open
-#define SERVO_CLOSE_ANGLE       170    // Angle to close gate
+#define SERVO_CLOSE_ANGLE       180    // Angle to close gate
+#define SERVO_CLOSE_APPROACH_ANGLE 176 // Stop a few degrees before hard end-stop
+#define SERVO_RAMP_STEP_DEG     2      // Smaller steps reduce jerk and current spikes
+#define SERVO_RAMP_STEP_MS      20
+#define SERVO_SETTLE_MS         200
+#define SERVO_RELEASE_PWM_AFTER_MOVE 1 // 1 = lowest buzz/current, 0 = actively hold position
 
 // Hall module output is active-high on this board: D0 rises when the magnet is present.
 // Use a shorter debounce so a fast moving train can still trigger reliably.
@@ -53,6 +58,7 @@ volatile system_state_t current_state = STATE_WAITING;
 volatile int64_t last_hall_trigger = 0;
 volatile int64_t last_btn_trigger = 0;
 volatile bool hall_sensor_armed = true;
+static int current_servo_angle = SERVO_OPEN_ANGLE;
 
 // --- Helpers ---
 void set_rgb_color(int r, int g, int b) {
@@ -62,11 +68,54 @@ void set_rgb_color(int r, int g, int b) {
 }
 
 void set_servo_angle(int angle) {
+    if (angle < 0) angle = 0;
+    if (angle > SERVO_MAX_DEGREE) angle = SERVO_MAX_DEGREE;
+
     uint32_t duty = (uint32_t)(((angle * (SERVO_MAX_PULSEWIDTH_US - SERVO_MIN_PULSEWIDTH_US)) / SERVO_MAX_DEGREE) + SERVO_MIN_PULSEWIDTH_US);
     // Convert microseconds to 13-bit duty cycle for 50Hz (20000us period)
     uint32_t duty_13bit = (duty * 8191) / 20000;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty_13bit);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    current_servo_angle = angle;
+}
+
+void servo_release_pwm(void) {
+    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+}
+
+void move_servo_smooth(int target_angle) {
+    if (target_angle < 0) target_angle = 0;
+    if (target_angle > SERVO_MAX_DEGREE) target_angle = SERVO_MAX_DEGREE;
+
+    if (target_angle > current_servo_angle) {
+        for (int angle = current_servo_angle; angle <= target_angle; angle += SERVO_RAMP_STEP_DEG) {
+            set_servo_angle(angle);
+            vTaskDelay(pdMS_TO_TICKS(SERVO_RAMP_STEP_MS));
+        }
+    } else if (target_angle < current_servo_angle) {
+        for (int angle = current_servo_angle; angle >= target_angle; angle -= SERVO_RAMP_STEP_DEG) {
+            set_servo_angle(angle);
+            vTaskDelay(pdMS_TO_TICKS(SERVO_RAMP_STEP_MS));
+        }
+    }
+
+    set_servo_angle(target_angle);
+}
+
+void command_gate_open(void) {
+    move_servo_smooth(SERVO_OPEN_ANGLE);
+#if SERVO_RELEASE_PWM_AFTER_MOVE
+    vTaskDelay(pdMS_TO_TICKS(SERVO_SETTLE_MS));
+    servo_release_pwm();
+#endif
+}
+
+void command_gate_close(void) {
+    move_servo_smooth(SERVO_CLOSE_APPROACH_ANGLE);
+#if SERVO_RELEASE_PWM_AFTER_MOVE
+    vTaskDelay(pdMS_TO_TICKS(SERVO_SETTLE_MS));
+    servo_release_pwm();
+#endif
 }
 
 system_mode_t read_mode_from_toggle() {
@@ -194,7 +243,7 @@ void app_main(void) {
     ledc_channel_config(&ledc_channel);
 
     // Initialize Gate to OPEN
-    set_servo_angle(SERVO_OPEN_ANGLE);
+    command_gate_open();
 
     // 4. Attach Interrupts
     gpio_install_isr_service(0);
@@ -214,7 +263,7 @@ void app_main(void) {
     while (1) {
         if (current_state != previous_state) {
             if (current_state == STATE_WAITING) {
-                set_servo_angle(SERVO_OPEN_ANGLE); // Reset gate to open when returning to waiting
+                command_gate_open(); // Reset gate to open when returning to waiting
             } else if (current_state == STATE_ACTION) {
                 if (current_mode == MODE_COLLECTION) {
                     printf("DATA,%.2f", distances[14]);
@@ -226,10 +275,10 @@ void app_main(void) {
                     bool close_gate = predict_gate_action(distances[14], v, a);
                     if (close_gate) {
                         ESP_LOGW(TAG, "INFERENCE: Train approaching. CLOSING GATE.");
-                        set_servo_angle(SERVO_CLOSE_ANGLE);
+                        command_gate_close();
                     } else {
                         ESP_LOGI(TAG, "INFERENCE: Train stopping/safe. Gate remains open.");
-                        set_servo_angle(SERVO_OPEN_ANGLE);
+                        command_gate_open();
                     }
                 }
             }
