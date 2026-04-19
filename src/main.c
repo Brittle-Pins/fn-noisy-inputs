@@ -180,6 +180,12 @@ static bool is_distance_in_valid_range(float distance_cm) {
     return (distance_cm >= DIST_MIN_CM && distance_cm <= DIST_MAX_CM);
 }
 
+static float median3f(float a, float b, float c) {
+    if ((a >= b && a <= c) || (a >= c && a <= b)) return a;
+    if ((b >= a && b <= c) || (b >= c && b <= a)) return b;
+    return c;
+}
+
 // --- Machine Learning Placeholder ---
 bool predict_gate_action(float distance, float* v, float* a) {
     // TODO: Pass the 15 features to Scikit-Learn DT or TFLite MLP
@@ -266,6 +272,7 @@ void app_main(void) {
     system_mode_t current_mode = read_mode_from_toggle();
     system_state_t previous_state = current_state;
     static float distances[15];
+    static float distances_filtered[15];
     static float v[14];
     static float a[13];
 
@@ -341,11 +348,24 @@ void app_main(void) {
             }
             printf("\n");
 
+            // 3-sample sliding median filter (centered). For edges, duplicate nearest neighbor.
+            distances_filtered[0] = median3f(distances[0], distances[0], distances[1]);
+            for (int i = 1; i < 14; i++) {
+                distances_filtered[i] = median3f(distances[i - 1], distances[i], distances[i + 1]);
+            }
+            distances_filtered[14] = median3f(distances[13], distances[14], distances[14]);
+
+            printf("Filtered Distances:");
+            for (int i = 0; i < 15; i++) {
+                printf(" %.2f", distances_filtered[i]);
+            }
+            printf("\n");
+
             // Feature extraction
             float dt = 0.1;
 
             for (int i = 0; i < 14; i++) {
-                v[i] = (distances[i+1] - distances[i]) / dt;
+                v[i] = (distances_filtered[i+1] - distances_filtered[i]) / dt;
             }
             for (int i = 0; i < 13; i++) {
                 a[i] = (v[i+1] - v[i]) / dt;
