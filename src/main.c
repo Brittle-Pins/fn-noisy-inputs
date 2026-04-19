@@ -29,6 +29,8 @@ static const char *TAG = "RAILWAY_SYSTEM";
 #define DIST_MAX_CM          70.0f
 #define SAMPLE_PERIOD_MS     100
 #define SAMPLE_PERIOD_US     (SAMPLE_PERIOD_MS * 1000)
+#define DIST_SAMPLE_COUNT    15
+#define INVALID_SAMPLE_THRESHOLD 8 // Mark run invalid when >= 8/15 samples are rejected
 
 // --- Servo PWM Settings ---
 #define SERVO_MIN_PULSEWIDTH_US 500  // Minimum pulse width in microsecond (0 degrees)
@@ -271,10 +273,11 @@ void app_main(void) {
 
     system_mode_t current_mode = read_mode_from_toggle();
     system_state_t previous_state = current_state;
-    static float distances[15];
-    static float distances_filtered[15];
+    static float distances[DIST_SAMPLE_COUNT];
+    static float distances_filtered[DIST_SAMPLE_COUNT];
     static float v[14];
     static float a[13];
+    bool last_run_invalid = false;
 
     // 5. Main Loop
     while (1) {
@@ -283,15 +286,23 @@ void app_main(void) {
                 command_gate_open(); // Reset gate to open when returning to waiting
             } else if (current_state == STATE_ACTION) {
                 if (current_mode == MODE_COLLECTION) {
-                    printf("DATA,%.2f", distances[14]);
-                    for (int i = 13; i >= 7; i--) printf(",%.2f", v[i]);
-                    for (int i = 12; i >= 6; i--) printf(",%.2f", a[i]);
-                    printf("\n");
-                    ESP_LOGI(TAG, "Data saved. Waiting for reset.");
+                    if (last_run_invalid) {
+                        ESP_LOGW(TAG, "Run invalid (too many rejected distance samples). DATA line skipped.");
+                    } else {
+                        printf("DATA,%.2f", distances_filtered[14]);
+                        for (int i = 13; i >= 7; i--) printf(",%.2f", v[i]);
+                        for (int i = 12; i >= 6; i--) printf(",%.2f", a[i]);
+                        printf("\n");
+                        ESP_LOGI(TAG, "Data saved. Waiting for reset.");
+                    }
                 } else {
-                    bool close_gate = predict_gate_action(distances[14], v, a);
+                    bool close_gate = last_run_invalid ? true : predict_gate_action(distances_filtered[14], v, a);
                     if (close_gate) {
-                        ESP_LOGW(TAG, "INFERENCE: Train approaching. CLOSING GATE.");
+                        if (last_run_invalid) {
+                            ESP_LOGW(TAG, "INFERENCE: Run invalid. Failsafe CLOSE gate.");
+                        } else {
+                            ESP_LOGW(TAG, "INFERENCE: Train approaching. CLOSING GATE.");
+                        }
                         command_gate_close();
                     } else {
                         ESP_LOGI(TAG, "INFERENCE: Train stopping/safe. Gate remains open.");
@@ -318,9 +329,10 @@ void app_main(void) {
 
             float last_valid_distance = DIST_MAX_CM;
             bool has_valid_distance = false;
+            int rejected_samples = 0;
             int64_t next_sample_time_us = esp_timer_get_time();
 
-            for (int i = 0; i < 15; i++) {
+            for (int i = 0; i < DIST_SAMPLE_COUNT; i++) {
                 float raw_distance = read_distance_cm();
                 if (is_distance_in_valid_range(raw_distance)) {
                     distances[i] = raw_distance;
@@ -332,6 +344,7 @@ void app_main(void) {
                     distances[i] = has_valid_distance ? last_valid_distance : DIST_MAX_CM;
                     ESP_LOGW(TAG, "Rejected ultrasonic sample %.2f cm at idx %d; substituted %.2f cm",
                              raw_distance, i, distances[i]);
+                    rejected_samples++;
                 }
 
                 next_sample_time_us += SAMPLE_PERIOD_US;
@@ -342,8 +355,12 @@ void app_main(void) {
                 }
             }
 
+            last_run_invalid = (rejected_samples >= INVALID_SAMPLE_THRESHOLD);
+            ESP_LOGI(TAG, "Rejected samples: %d/%d. Run validity: %s",
+                     rejected_samples, DIST_SAMPLE_COUNT, last_run_invalid ? "INVALID" : "VALID");
+
             printf("Raw Distances:");
-            for (int i = 0; i < 15; i++) {
+            for (int i = 0; i < DIST_SAMPLE_COUNT; i++) {
                 printf(" %.2f", distances[i]);
             }
             printf("\n");
@@ -356,7 +373,7 @@ void app_main(void) {
             distances_filtered[14] = median3f(distances[13], distances[14], distances[14]);
 
             printf("Filtered Distances:");
-            for (int i = 0; i < 15; i++) {
+            for (int i = 0; i < DIST_SAMPLE_COUNT; i++) {
                 printf(" %.2f", distances_filtered[i]);
             }
             printf("\n");
@@ -374,7 +391,11 @@ void app_main(void) {
             current_state = STATE_ACTION;
 
         } else if (current_state == STATE_ACTION) {
-            set_rgb_color(0, 1, 0); // Green: SAVED / ACTION COMPLETE
+            if (last_run_invalid) {
+                set_rgb_color(1, 1, 0); // Yellow: INVALID RUN / FAILSAFE ACTION
+            } else {
+                set_rgb_color(0, 1, 0); // Green: SAVED / ACTION COMPLETE
+            }
             
             vTaskDelay(pdMS_TO_TICKS(100));
         }
