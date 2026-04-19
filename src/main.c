@@ -24,6 +24,12 @@ static const char *TAG = "RAILWAY_SYSTEM";
 #define LED_G            15
 #define LED_B            12
 
+// Ultrasonic measurement constraints
+#define DIST_MIN_CM          1.0f
+#define DIST_MAX_CM          70.0f
+#define SAMPLE_PERIOD_MS     100
+#define SAMPLE_PERIOD_US     (SAMPLE_PERIOD_MS * 1000)
+
 // --- Servo PWM Settings ---
 #define SERVO_MIN_PULSEWIDTH_US 500  // Minimum pulse width in microsecond (0 degrees)
 #define SERVO_MAX_PULSEWIDTH_US 2500 // Maximum pulse width in microsecond (180 degrees)
@@ -164,9 +170,14 @@ float read_distance_cm() {
     int64_t echo_end = esp_timer_get_time();
 
     int64_t duration = echo_end - echo_start;
-    if (duration <= 0 || duration >= 30000) return -1.0;
+    // If the loop broke because it hit the timeout limit, the reading is invalid
+    if (duration <= 0 || echo_end >= timeout) return -1.0;
 
     return (duration * 0.0343) / 2.0; 
+}
+
+static bool is_distance_in_valid_range(float distance_cm) {
+    return (distance_cm >= DIST_MIN_CM && distance_cm <= DIST_MAX_CM);
 }
 
 // --- Machine Learning Placeholder ---
@@ -298,10 +309,37 @@ void app_main(void) {
             set_rgb_color(1, 0, 0); // Red: READING
             ESP_LOGW(TAG, "Train Detected! Collecting features...");
 
+            float last_valid_distance = DIST_MAX_CM;
+            bool has_valid_distance = false;
+            int64_t next_sample_time_us = esp_timer_get_time();
+
             for (int i = 0; i < 15; i++) {
-                distances[i] = read_distance_cm();
-                vTaskDelay(pdMS_TO_TICKS(100));
+                float raw_distance = read_distance_cm();
+                if (is_distance_in_valid_range(raw_distance)) {
+                    distances[i] = raw_distance;
+                    last_valid_distance = raw_distance;
+                    has_valid_distance = true;
+                } else {
+                    // Keep a stable series: reuse the last valid sample, or clamp to max range
+                    // until the first valid sample arrives.
+                    distances[i] = has_valid_distance ? last_valid_distance : DIST_MAX_CM;
+                    ESP_LOGW(TAG, "Rejected ultrasonic sample %.2f cm at idx %d; substituted %.2f cm",
+                             raw_distance, i, distances[i]);
+                }
+
+                next_sample_time_us += SAMPLE_PERIOD_US;
+                int64_t now_us = esp_timer_get_time();
+                if (next_sample_time_us > now_us) {
+                    int64_t wait_us = next_sample_time_us - now_us;
+                    vTaskDelay(pdMS_TO_TICKS((wait_us + 999) / 1000));
+                }
             }
+
+            printf("Raw Distances:");
+            for (int i = 0; i < 15; i++) {
+                printf(" %.2f", distances[i]);
+            }
+            printf("\n");
 
             // Feature extraction
             float dt = 0.1;
