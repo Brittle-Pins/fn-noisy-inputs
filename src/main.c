@@ -190,7 +190,7 @@ static float median3f(float a, float b, float c) {
 
 // --- Machine Learning Placeholder ---
 bool predict_gate_action(float distance, float* v, float* a) {
-    // TODO: Pass the 15 features to Scikit-Learn DT or TFLite MLP
+    // TODO: Pass the features to Scikit-Learn DT or TFLite MLP
     // Return true to CLOSE gate, false to KEEP OPEN
     
     // Dummy logic: Close gate if object is closer than 50cm and accelerating towards it
@@ -290,8 +290,8 @@ void app_main(void) {
                         ESP_LOGW(TAG, "Run invalid (too many rejected distance samples). DATA line skipped.");
                     } else {
                         printf("DATA,%.2f", distances_filtered[14]);
-                        for (int i = 13; i >= 7; i--) printf(",%.2f", v[i]);
-                        for (int i = 12; i >= 6; i--) printf(",%.2f", a[i]);
+                        for (int i = 13; i >= 0; i--) printf(",%.2f", v[i]);
+                        for (int i = 12; i >= 0; i--) printf(",%.2f", a[i]);
                         printf("\n");
                         ESP_LOGI(TAG, "Data saved. Waiting for reset.");
                     }
