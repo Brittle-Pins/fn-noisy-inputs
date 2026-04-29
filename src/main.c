@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "rom/ets_sys.h"
+#include "gate_model_api.h"
 
 static const char *TAG = "RAILWAY_SYSTEM";
 
@@ -16,6 +17,7 @@ static const char *TAG = "RAILWAY_SYSTEM";
 #define HALL_ANALOG_CHANNEL ADC1_CHANNEL_6
 #define BUTTON_GPIO      26
 #define TOGGLE_GPIO      25
+#define MODEL_SELECT_GPIO 17
 #define SERVO_GPIO       21
 #define BUILTIN_LED      13 // Adafruit Feather Built-in LED
 #define TRIG_GPIO        33
@@ -67,6 +69,7 @@ volatile int64_t last_hall_trigger = 0;
 volatile int64_t last_btn_trigger = 0;
 volatile bool hall_sensor_armed = true;
 static int current_servo_angle = SERVO_OPEN_ANGLE;
+static inference_model_t current_inference_model = INFERENCE_MODEL_DT;
 
 // --- Helpers ---
 void set_rgb_color(int r, int g, int b) {
@@ -137,6 +140,15 @@ system_mode_t read_mode_from_toggle() {
     }
 }
 
+inference_model_t read_inference_model_from_toggle() {
+    // LOW selects the DT, HIGH selects the MLP placeholder.
+    return gpio_get_level(MODEL_SELECT_GPIO) == 0 ? INFERENCE_MODEL_DT : INFERENCE_MODEL_MLP;
+}
+
+const char* inference_model_to_string(inference_model_t model) {
+    return model == INFERENCE_MODEL_MLP ? "MLP" : "DT";
+}
+
 // --- Interrupt Service Routines ---
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     uint32_t gpio_num = (uint32_t) arg;
@@ -188,18 +200,6 @@ static float median3f(float a, float b, float c) {
     return c;
 }
 
-// --- Machine Learning Placeholder ---
-bool predict_gate_action(float distance, float* v, float* a) {
-    // TODO: Pass the features to Scikit-Learn DT or TFLite MLP
-    // Return true to CLOSE gate, false to KEEP OPEN
-    
-    // Dummy logic: Close gate if object is closer than 50cm and accelerating towards it
-    if (distance > 0 && distance < 50.0 && v[13] < -10.0) {
-        return true; 
-    }
-    return false;
-}
-
 void app_main(void) {
     // 1. Configure Inputs
     gpio_config_t in_conf = {
@@ -218,6 +218,14 @@ void app_main(void) {
         .pull_up_en = 1,
     };
     gpio_config(&toggle_conf);
+
+    gpio_config_t model_select_conf = {
+        .intr_type = GPIO_INTR_DISABLE,
+        .mode = GPIO_MODE_INPUT,
+        .pin_bit_mask = (1ULL << MODEL_SELECT_GPIO),
+        .pull_up_en = 1,
+    };
+    gpio_config(&model_select_conf);
 
     // 2. Configure Outputs
     gpio_config_t out_conf = {
@@ -296,16 +304,26 @@ void app_main(void) {
                         ESP_LOGI(TAG, "Data saved. Waiting for reset.");
                     }
                 } else {
-                    bool close_gate = last_run_invalid ? true : predict_gate_action(distances_filtered[14], v, a);
+                    bool close_gate = true;
+                    if (!last_run_invalid) {
+                        current_inference_model = read_inference_model_from_toggle();
+                        close_gate = current_inference_model == INFERENCE_MODEL_MLP
+                            ? predict_gate_action_mlp(distances_filtered[14], v, a)
+                            : predict_gate_action_dt(distances_filtered[14], v, a);
+                    }
+
                     if (close_gate) {
                         if (last_run_invalid) {
                             ESP_LOGW(TAG, "INFERENCE: Run invalid. Failsafe CLOSE gate.");
+                        } else if (current_inference_model == INFERENCE_MODEL_MLP) {
+                            ESP_LOGW(TAG, "INFERENCE (MLP): Train approaching. CLOSING GATE.");
                         } else {
-                            ESP_LOGW(TAG, "INFERENCE: Train approaching. CLOSING GATE.");
+                            ESP_LOGW(TAG, "INFERENCE (DT): Train approaching. CLOSING GATE.");
                         }
                         command_gate_close();
                     } else {
-                        ESP_LOGI(TAG, "INFERENCE: Train stopping/safe. Gate remains open.");
+                        ESP_LOGI(TAG, "INFERENCE (%s): Train stopping/safe. Gate remains open.",
+                                 inference_model_to_string(current_inference_model));
                         command_gate_open();
                     }
                 }
@@ -316,6 +334,7 @@ void app_main(void) {
         if (current_state == STATE_WAITING) {
             set_rgb_color(0, 0, 1); // Blue: WAITING
             current_mode = read_mode_from_toggle(); // Update mode based on toggle switch            
+            current_inference_model = read_inference_model_from_toggle();
 
             if (gpio_get_level(HALL_SENSOR_GPIO) == 0) {
                 hall_sensor_armed = true;
