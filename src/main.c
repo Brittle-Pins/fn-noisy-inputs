@@ -12,39 +12,39 @@
 static const char *TAG = "RAILWAY_SYSTEM";
 
 // --- Pin Definitions ---
-#define HALL_SENSOR_GPIO 27
-#define HALL_ANALOG_GPIO  34
+#define HALL_SENSOR_GPIO    27
+#define HALL_ANALOG_GPIO    34
 #define HALL_ANALOG_CHANNEL ADC1_CHANNEL_6
-#define BUTTON_GPIO      26
-#define TOGGLE_GPIO      25
-#define MODEL_SELECT_GPIO 17
-#define SERVO_GPIO       21
-#define BUILTIN_LED      13 // Adafruit Feather Built-in LED
-#define TRIG_GPIO        33
-#define ECHO_GPIO        32
-#define LED_R            14
-#define LED_G            15
-#define LED_B            12
+#define BUTTON_GPIO         26
+#define TOGGLE_GPIO         25
+#define MODEL_SELECT_GPIO   17
+#define SERVO_GPIO          21
+#define BUILTIN_LED         13 // Adafruit Feather Built-in LED
+#define TRIG_GPIO           33
+#define ECHO_GPIO           32
+#define LED_R               14
+#define LED_G               15
+#define LED_B               12
 
 // Ultrasonic measurement constraints
-#define DIST_MIN_CM          1.0f
-#define DIST_MAX_CM          70.0f
-#define SAMPLE_PERIOD_MS     100
-#define SAMPLE_PERIOD_US     (SAMPLE_PERIOD_MS * 1000)
-#define DIST_SAMPLE_COUNT    15
+#define DIST_MIN_CM              1.0f
+#define DIST_MAX_CM              70.0f
+#define SAMPLE_PERIOD_MS         100
+#define SAMPLE_PERIOD_US         (SAMPLE_PERIOD_MS * 1000)
+#define DIST_SAMPLE_COUNT        15
 #define INVALID_SAMPLE_THRESHOLD 8 // Mark run invalid when >= 8/15 samples are rejected
 
 // --- Servo PWM Settings ---
-#define SERVO_MIN_PULSEWIDTH_US 500  // Minimum pulse width in microsecond (0 degrees)
-#define SERVO_MAX_PULSEWIDTH_US 2500 // Maximum pulse width in microsecond (180 degrees)
-#define SERVO_MAX_DEGREE        180  // Maximum angle
-#define SERVO_OPEN_ANGLE        0   // Angle to keep gate open
-#define SERVO_CLOSE_ANGLE       180    // Angle to close gate
-#define SERVO_CLOSE_APPROACH_ANGLE 176 // Stop a few degrees before hard end-stop
-#define SERVO_RAMP_STEP_DEG     2      // Smaller steps reduce jerk and current spikes
-#define SERVO_RAMP_STEP_MS      20
-#define SERVO_SETTLE_MS         200
-#define SERVO_RELEASE_PWM_AFTER_MOVE 1 // 1 = lowest buzz/current, 0 = actively hold position
+#define SERVO_MIN_PULSEWIDTH_US      500  // Minimum pulse width in microsecond (0 degrees)
+#define SERVO_MAX_PULSEWIDTH_US      2500 // Maximum pulse width in microsecond (180 degrees)
+#define SERVO_MAX_DEGREE             180  // Maximum angle
+#define SERVO_OPEN_ANGLE             0    // Angle to keep gate open
+#define SERVO_CLOSE_ANGLE            180  // Angle to close gate
+#define SERVO_CLOSE_APPROACH_ANGLE   176  // Stop a few degrees before hard end-stop
+#define SERVO_RAMP_STEP_DEG          2    // Smaller steps reduce jerk and current spikes
+#define SERVO_RAMP_STEP_MS           20
+#define SERVO_SETTLE_MS              200
+#define SERVO_RELEASE_PWM_AFTER_MOVE 1    // 1 = lowest buzz/current, 0 = actively hold position
 
 // Hall module output is active-high on this board: D0 rises when the magnet is present.
 // Use a shorter debounce so a fast moving train can still trigger reliably.
@@ -59,7 +59,7 @@ typedef enum {
 typedef enum {
     STATE_WAITING,
     STATE_READING,
-    STATE_ACTION // Previously STATE_SAVED
+    STATE_ACTION
 } system_state_t;
 
 volatile system_state_t current_state = STATE_WAITING;
@@ -83,7 +83,7 @@ void set_servo_angle(int angle) {
     if (angle > SERVO_MAX_DEGREE) angle = SERVO_MAX_DEGREE;
 
     uint32_t duty = (uint32_t)(((angle * (SERVO_MAX_PULSEWIDTH_US - SERVO_MIN_PULSEWIDTH_US)) / SERVO_MAX_DEGREE) + SERVO_MIN_PULSEWIDTH_US);
-    // Convert microseconds to 13-bit duty cycle for 50Hz (20000us period)
+    // Convert microseconds to 13-bit duty cycle for 50Hz (20000µs period)
     uint32_t duty_13bit = (duty * 8191) / 20000;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty_13bit);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
@@ -141,7 +141,7 @@ system_mode_t read_mode_from_toggle() {
 }
 
 inference_model_t read_inference_model_from_toggle() {
-    // LOW selects the DT, HIGH selects the MLP placeholder.
+    // LOW selects the DT, HIGH selects the MLP.
     return gpio_get_level(MODEL_SELECT_GPIO) == 0 ? INFERENCE_MODEL_DT : INFERENCE_MODEL_MLP;
 }
 
@@ -187,6 +187,7 @@ float read_distance_cm() {
     // If the loop broke because it hit the timeout limit, the reading is invalid
     if (duration <= 0 || echo_end >= timeout) return -1.0;
 
+    // Speed of sound is 343 m/s -> 0.0343 cm/µs; divide by 2 for round trip.
     return (duration * 0.0343) / 2.0; 
 }
 
@@ -384,7 +385,7 @@ void app_main(void) {
             }
             printf("\n");
 
-            // 3-sample sliding median filter (centered). For edges, duplicate nearest neighbor.
+            // 3-sample sliding median filter (centered). For edges, duplicate nearest neighbour.
             distances_filtered[0] = median3f(distances[0], distances[0], distances[1]);
             for (int i = 1; i < 14; i++) {
                 distances_filtered[i] = median3f(distances[i - 1], distances[i], distances[i + 1]);
